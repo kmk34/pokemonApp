@@ -42,16 +42,11 @@ fun PokemonItemCard(
                     navController.navigate("detail/${item.name}/${item.koreanName}")
             }
     ) {
-        val imgModifier = Modifier
-            .padding(8.dp)
-            .size(96.dp)
-
         Box(
             modifier = Modifier
                 .padding(8.dp)
                 .size(96.dp)
         ) {
-            val imgURL = item.imgURL
             ImageIcon(
                 imgURL = item.imgURL ?: "",
                 size = 96.dp,
