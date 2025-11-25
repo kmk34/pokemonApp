@@ -2,7 +2,6 @@ package com.example.poketmon
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-//import com.example.pokemon.data.database.FavoritePokemon
 import com.example.pokemon.domain.mapper.PokemonMapper
 import com.example.pokemon.domain.model.Pokemon
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -12,12 +11,10 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import com.example.pokemon.utils.MyLog
-import dagger.hilt.android.scopes.ViewModelScoped
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.takeWhile
-import kotlinx.coroutines.flow.transformWhile
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 
 @HiltViewModel
 class PokemonViewModel @Inject constructor(
@@ -38,7 +35,6 @@ class PokemonViewModel @Inject constructor(
     private var offset = 0
     private val limit = 100
     private var totalItemcnt = -1
-    private var isLastPage = false
 
     private val _favorites = MutableStateFlow<List<Pokemon>>(emptyList())
     val favorites: StateFlow<List<Pokemon>> = _favorites
@@ -46,11 +42,48 @@ class PokemonViewModel @Inject constructor(
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
-    init {
-        //todo: 로딩
+    private val _isLastPage = MutableStateFlow(false)
+    val isLastPage: StateFlow<Boolean> = _isLastPage.asStateFlow()
+
+    private val _isLikedFilter = MutableStateFlow(false)
+    val isLikedFilter: StateFlow<Boolean> = _isLikedFilter.asStateFlow()
+
+    fun toggleLikedFilter() {
+        _isLikedFilter.value = !_isLikedFilter.value
+    }
+
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+
+    fun updateSearchQuery(query: String) {
+        _searchQuery.value = query
+    }
+
+    init { //todo: 로딩
         MyLog.d("[mk] PokemonViewModel init")
         getFavoriteList()
     }
+
+    val filteredPokemonList: StateFlow<List<Pokemon>> = combine(
+        _pokemonList,
+        _favorites,
+        _isLikedFilter,
+        _searchQuery
+    ) { allList, favorites, isFilterOn, query ->
+        var filtered = if (isFilterOn) {
+            allList.filter { pokemon -> favorites.any { it.name == pokemon.name } }
+        } else allList
+
+        if (query.isNotBlank()) {
+            filtered = filtered.filter {
+                it.name.contains(query, ignoreCase = true) || it.koreanName.contains(
+                    query,
+                    ignoreCase = true
+                )
+            }
+        }
+        filtered
+    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     fun getFavoriteList(){
         viewModelScope.launch {
@@ -95,57 +128,59 @@ class PokemonViewModel @Inject constructor(
 
     fun getPokemonList() {
         MyLog.d("[mk] getPokemonList()")
-        if (isLoading.value || isLastPage) return
-        if (totalItemcnt != -1 && offset >= totalItemcnt) {
-            isLastPage = true
-            return
-        }
-
         _isLoading.value = true
 
         viewModelScope.launch {
-            getPokemonListUseCase(limit, offset)
-                .catch { e -> _isLoading.value = false }
-                .collect { response ->
-                    totalItemcnt = response.count
+            _isLoading.value = true
+            try {
+                getPokemonListUseCase(limit, offset)
+                    .catch { e -> _isLoading.value = false }
+                    .collect { response ->
+                        totalItemcnt = 300
 
-                    val newPokemonList = PokemonMapper.toDomainList(response.results)
+                        val newPokemonList = PokemonMapper.toDomainList(response.results)
+                        _pokemonList.value += newPokemonList
+                        offset += limit
 
-                    _pokemonList.value += newPokemonList
-
-                    offset += limit
-
-                    if (offset >= totalItemcnt) isLastPage = true
-
-                    _isLoading.value = false
-
-                    newPokemonList.map { item ->
-                        if (fetchedKoreanNames.contains(item.name))
-                            return@map
+                        if (offset < totalItemcnt)
+                            getPokemonList()
                         else
-                            fetchedKoreanNames.add(item.name)
+                            _isLastPage.value = true
 
-                        viewModelScope.launch {
-                            getPokemonSpecUseCase(item.name)
-                                .catch {}
-                                .collect {
-                                    val Names = it.names.find { it.language.name == "ko" }
-                                    val currentList = _pokemonList.value.toMutableList()
-                                    val index = currentList.indexOfFirst { it.name == item.name }
-                                    val isFavorite = _favorites.value.any { it.name == item.name }
-//                                    MyLog.d("[mk][isFavorite] isFavorite: $isFavorite")
-                                    if (index != -1 && Names?.name != null) {
-                                        val updatedItem =
-                                            currentList[index].copy(koreanName = Names.name, isFavorite = isFavorite)
-                                        currentList[index] = updatedItem
-                                        _pokemonList.value = currentList.toList() // 상태 변경 트리거
-                                    }
-                                }
+                        _isLoading.value = false
+
+                        updateKoreanNames(newPokemonList)
+                    }
+            } catch (e: Exception) {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    private fun updateKoreanNames(pokemonList: List<Pokemon>) {
+        pokemonList.forEach { item ->
+            if (fetchedKoreanNames.contains(item.name)) return@forEach
+            fetchedKoreanNames.add(item.name)
+
+            viewModelScope.launch {
+                getPokemonSpecUseCase(item.name)
+                    .catch {}
+                    .collect { spec ->
+                        val koName = spec.names.find { it.language.name == "ko" }?.name
+                        val currentList = _pokemonList.value.toMutableList()
+                        val index = currentList.indexOfFirst { it.name == item.name }
+                        val isFavorite = _favorites.value.any { it.name == item.name }
+
+                        if (index != -1 && koName != null) {
+                            val updatedItem = currentList[index].copy(
+                                koreanName = koName,
+                                isFavorite = isFavorite
+                            )
+                            currentList[index] = updatedItem
+                            _pokemonList.value = currentList.toList() // 상태 변경 트리거
                         }
                     }
-
-
-                }
+            }
         }
     }
 
@@ -167,10 +202,6 @@ class PokemonViewModel @Inject constructor(
                     }
             }
         }
-    }
-
-    fun isLastPage(): Boolean {
-        return isLastPage
     }
 
 //    suspend fun isFavorite(name: String): Boolean {
