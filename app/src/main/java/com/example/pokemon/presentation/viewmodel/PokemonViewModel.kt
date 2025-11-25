@@ -55,7 +55,6 @@ class PokemonViewModel @Inject constructor(
     }
 
     init { //todo: 로딩
-        MyLog.d("[mk] PokemonViewModel init")
         getFavoriteList()
     }
 
@@ -85,7 +84,6 @@ class PokemonViewModel @Inject constructor(
             getFavoritesPokemonUseCase()
                 .catch {}
                 .collect {
-                    MyLog.d("[mk][isFavorite] favorites : $it")
                     _favorites.value = it
                 }
         }
@@ -94,21 +92,25 @@ class PokemonViewModel @Inject constructor(
     fun addFavorite(item: Pokemon) {
         viewModelScope.launch {
             addFavoritePokemonUseCase(item)
-        }
 
-        val currentList = _pokemonList.value.toMutableList()
-        val index = currentList.indexOfFirst { it.name == item.name }
-        if (index != -1) {
-            val updatedItem =
-                currentList[index].copy(isFavorite = true)
-            currentList[index] = updatedItem
-            _pokemonList.value = currentList.toList() // 상태 변경 트리거
+            getFavoriteList()
+
+            val currentList = _pokemonList.value.toMutableList()
+            val index = currentList.indexOfFirst { it.name == item.name }
+            if (index != -1) {
+                val updatedItem =
+                    currentList[index].copy(isFavorite = true)
+                currentList[index] = updatedItem
+                _pokemonList.value = currentList.toList() // 상태 변경 트리거
+            }
         }
     }
 
     fun deleteFavorite(item: Pokemon) {
         viewModelScope.launch {
             deleteFavoritePokemonUseCase(item)
+
+            getFavoriteList()
 
             val currentList = _pokemonList.value.toMutableList()
             val index = currentList.indexOfFirst { it.name == item.name }
@@ -180,7 +182,6 @@ class PokemonViewModel @Inject constructor(
                 getPokemonDetailUseCase(id)
                     .catch {}
                     .collect { item ->
-                        MyLog.d("[mk] item Detail: $item")
                         _pokemon.value = item
                         _isLoading.value = false
                     }
