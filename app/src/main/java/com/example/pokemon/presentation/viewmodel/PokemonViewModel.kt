@@ -30,11 +30,6 @@ class PokemonViewModel @Inject constructor(
     val pokemonList: StateFlow<List<Pokemon>> = _pokemonList
     private val _pokemon = MutableStateFlow<PokemonDetailDto?>(null)
     val pokemon: StateFlow<PokemonDetailDto?> = _pokemon
-    private val fetchedKoreanNames = mutableSetOf<String>()
-
-    private var offset = 0
-    private val limit = 100
-    private var totalItemcnt = -1
 
     private val _favorites = MutableStateFlow<List<Pokemon>>(emptyList())
     val favorites: StateFlow<List<Pokemon>> = _favorites
@@ -85,7 +80,7 @@ class PokemonViewModel @Inject constructor(
         filtered
     }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    fun getFavoriteList(){
+    fun getFavoriteList() {
         viewModelScope.launch {
             getFavoritesPokemonUseCase()
                 .catch {}
@@ -96,7 +91,7 @@ class PokemonViewModel @Inject constructor(
         }
     }
 
-    fun addFavorite(item: Pokemon){
+    fun addFavorite(item: Pokemon) {
         viewModelScope.launch {
             addFavoritePokemonUseCase(item)
         }
@@ -111,7 +106,7 @@ class PokemonViewModel @Inject constructor(
         }
     }
 
-    fun deleteFavorite(item: Pokemon){
+    fun deleteFavorite(item: Pokemon) {
         viewModelScope.launch {
             deleteFavoritePokemonUseCase(item)
 
@@ -127,29 +122,19 @@ class PokemonViewModel @Inject constructor(
     }
 
     fun getPokemonList() {
-        MyLog.d("[mk] getPokemonList()")
         _isLoading.value = true
-
         viewModelScope.launch {
             _isLoading.value = true
             try {
-                getPokemonListUseCase(limit, offset)
+                getPokemonListUseCase()
                     .catch { e -> _isLoading.value = false }
-                    .collect { response ->
-                        totalItemcnt = 300
-
-                        val newPokemonList = PokemonMapper.toDomainList(response.results)
-                        _pokemonList.value += newPokemonList
-                        offset += limit
-
-                        if (offset < totalItemcnt)
-                            getPokemonList()
-                        else
-                            _isLastPage.value = true
-
+                    .collect { page ->
+                        _pokemonList.value += page.pokemons
+                        _isLastPage.value = page.isLastPage
                         _isLoading.value = false
 
-                        updateKoreanNames(newPokemonList)
+                        updateKoreanNames(page.pokemons)
+                        updateFavorite(page.pokemons)
                     }
             } catch (e: Exception) {
                 _isLoading.value = false
@@ -158,34 +143,33 @@ class PokemonViewModel @Inject constructor(
     }
 
     private fun updateKoreanNames(pokemonList: List<Pokemon>) {
-        pokemonList.forEach { item ->
-            if (fetchedKoreanNames.contains(item.name)) return@forEach
-            fetchedKoreanNames.add(item.name)
-
-            viewModelScope.launch {
-                getPokemonSpecUseCase(item.name)
-                    .catch {}
-                    .collect { spec ->
-                        val koName = spec.names.find { it.language.name == "ko" }?.name
-                        val currentList = _pokemonList.value.toMutableList()
-                        val index = currentList.indexOfFirst { it.name == item.name }
-                        val isFavorite = _favorites.value.any { it.name == item.name }
-
-                        if (index != -1 && koName != null) {
-                            val updatedItem = currentList[index].copy(
-                                koreanName = koName,
-                                isFavorite = isFavorite
-                            )
-                            currentList[index] = updatedItem
-                            _pokemonList.value = currentList.toList() // 상태 변경 트리거
-                        }
+        viewModelScope.launch {
+            getPokemonSpecUseCase(pokemonList)
+                .catch {}
+                .collect { response ->
+                    val currentList = _pokemonList.value.toMutableList()
+                    val index = currentList.indexOfFirst { it.name == response.name }
+                    val isFavorite = _favorites.value.any { it.name == response.name }
+                    if (index != -1) {
+                        currentList[index] = response.copy(isFavorite = isFavorite)
+                        _pokemonList.value = currentList.toList()
                     }
-            }
+                }
         }
     }
 
-    fun searchPokemon(name: String): Pokemon? {
-        return pokemonList.value.find { it.name.contains(name) }
+    private fun updateFavorite(pokemonList: List<Pokemon>) {
+        viewModelScope.launch {
+            for (pokemon in pokemonList) {
+                val currentList = _pokemonList.value.toMutableList()
+                val index = currentList.indexOfFirst { it.name == pokemon.name }
+                val isFavorite = _favorites.value.any { it.name == pokemon.name }
+                if (index != -1) {
+                    currentList[index] = pokemon.copy(isFavorite = isFavorite)
+                    _pokemonList.value = currentList.toList()
+                }
+            }
+        }
     }
 
     fun getPokemonDetail(id: String?) {
@@ -203,9 +187,4 @@ class PokemonViewModel @Inject constructor(
             }
         }
     }
-
-//    suspend fun isFavorite(name: String): Boolean {
-//
-//        return isFavoritePokemonUseCase(name)
-//    }
 }
